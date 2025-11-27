@@ -1,6 +1,6 @@
 ﻿import 'package:world_of_warship/game.dart';
 
-void main(List<String> arguments) {
+Future<void> main(List<String> arguments) async {
   final game = Game();
-  game.start();
+  await game.start();
 }

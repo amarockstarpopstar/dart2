@@ -1,19 +1,26 @@
 import 'dart:io';
+import 'dart:async';
 import 'player.dart';
+import 'stats_manager.dart';
+import 'logger.dart';
 
 class Game {
   late Player player1;
   late Player player2;
   int boardSize = 10;
   List<int> shipSizes = [4, 3, 3, 2, 2, 2, 1, 1, 1, 1]; 
+  
+  final StatsManager _statsManager = StatsManager();
+  final GameLogger _logger = GameLogger();
 
-  void start() {
+  Future<void> start() async {
     print('Welcome to Sea Battle!');
-    _setupGame();
-    _playGame();
+    await _setupGame();
+    await _playGame();
+    _logger.dispose();
   }
 
-  void _setupGame() {
+  Future<void> _setupGame() async {
     // Select Mode
     print('Select Mode:');
     print('1. Player vs Player');
@@ -54,6 +61,15 @@ class Game {
       player2 = HumanPlayer(p2Name, boardSize);
     }
 
+    // Load Stats
+    print('Loading stats...');
+    var p1Stats = await _statsManager.loadStats(player1.name);
+    print(p1Stats);
+    if (!isPvE) {
+      var p2Stats = await _statsManager.loadStats(player2.name);
+      print(p2Stats);
+    }
+
     // Placement
     _clearConsole();
     print('${player1.name}, place your ships.');
@@ -72,9 +88,12 @@ class Game {
     }
   }
 
-  void _playGame() {
+  Future<void> _playGame() async {
     Player current = player1;
     Player opponent = player2;
+
+    // Initial Game State Log
+    await _logger.updateGameStateFile(player1, player2);
 
     while (true) {
       _clearConsole();
@@ -87,27 +106,43 @@ class Game {
         print(current.board.render(showShips: true).join('\n'));
       }
 
-      var shot = current.makeMove(opponent.board);
-      bool hit = opponent.board.receiveShot(shot);
-      
-      if (hit) {
-        print('Hit!');
-        if (opponent.board.allShipsSunk) {
-          print('${current.name} wins!');
-          break;
+      try {
+        var shot = await current.makeMove(opponent.board);
+        bool hit = opponent.board.receiveShot(shot);
+        
+        String result = hit ? 'Hit' : 'Miss';
+        _logger.log('${current.name} attacked ${shot.x} ${shot.y}: $result');
+        await _logger.updateGameStateFile(player1, player2);
+
+        if (hit) {
+          print('Hit!');
+          if (opponent.board.allShipsSunk) {
+            print('${current.name} wins!');
+            _logger.log('${current.name} wins!');
+            await _updateStats(current, opponent);
+            break;
+          }
+          print('Shoot again!');
+          if (current is HumanPlayer) {
+               print('Press Enter to continue...');
+               stdin.readLineSync();
+          }
+          continue; 
+        } else {
+          print('Miss.');
+          if (current is HumanPlayer) {
+               print('Press Enter to end turn...');
+               stdin.readLineSync();
+          }
         }
-        print('Shoot again!');
-        if (current is HumanPlayer) {
-             print('Press Enter to continue...');
-             stdin.readLineSync();
-        }
-        continue; 
-      } else {
-        print('Miss.');
-        if (current is HumanPlayer) {
-             print('Press Enter to end turn...');
-             stdin.readLineSync();
-        }
+      } catch (e) {
+        // Catch errors from makeMove (like invalid input if we decided to throw, 
+        // but currently HumanPlayer handles its own loop. 
+        // However, if we throw from makeMove for logging purposes:
+        _logger.log('Error during ${current.name} turn: $e');
+        print('An error occurred: $e');
+        // If it was a critical error, we might break, but for game logic errors we might retry?
+        // Since HumanPlayer loops until valid input, this catch block might catch unexpected errors.
       }
 
       // Swap
@@ -120,6 +155,20 @@ class Game {
          print('Pass the device to ${current.name}. Press Enter when ready.');
          stdin.readLineSync();
       }
+    }
+  }
+
+  Future<void> _updateStats(Player winner, Player loser) async {
+    var wStats = await _statsManager.loadStats(winner.name);
+    wStats.gamesPlayed++;
+    wStats.wins++;
+    await _statsManager.saveStats(wStats);
+
+    if (loser is HumanPlayer) {
+      var lStats = await _statsManager.loadStats(loser.name);
+      lStats.gamesPlayed++;
+      lStats.losses++;
+      await _statsManager.saveStats(lStats);
     }
   }
 

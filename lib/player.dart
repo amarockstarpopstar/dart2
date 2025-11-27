@@ -1,5 +1,7 @@
 import 'dart:math';
 import 'dart:io';
+import 'dart:async';
+import 'dart:isolate';
 import 'board.dart';
 import 'ship.dart';
 
@@ -9,7 +11,7 @@ abstract class Player {
 
   Player(this.name, int boardSize) : board = Board(boardSize, boardSize);
 
-  Point<int> makeMove(Board opponentBoard);
+  Future<Point<int>> makeMove(Board opponentBoard);
   void placeShips(List<int> shipSizes);
 }
 
@@ -17,7 +19,7 @@ class HumanPlayer extends Player {
   HumanPlayer(super.name, super.boardSize);
 
   @override
-  Point<int> makeMove(Board opponentBoard) {
+  Future<Point<int>> makeMove(Board opponentBoard) async {
     while (true) {
       stdout.write('$name, enter coordinates to attack (x y): ');
       String? input = stdin.readLineSync();
@@ -35,18 +37,25 @@ class HumanPlayer extends Player {
         var p = Point(x, y);
 
         if (x < 0 || x >= opponentBoard.width || y < 0 || y >= opponentBoard.height) {
-          print('Coordinates out of bounds.');
-          continue;
+          throw FormatException('Coordinates out of bounds.');
         }
         
         if (opponentBoard.shots.contains(p)) {
-          print('You already shot there.');
-          continue;
+          throw FormatException('You already shot there.');
         }
 
         return p;
+      } on FormatException catch (e) {
+        print('Error: ${e.message}');
+        // Rethrow to allow logging in Game loop if needed, but we need to stay in loop?
+        // If we throw, we exit makeMove.
+        // The requirement is to log the error.
+        // We can return a special value or throw.
+        // If we throw, the Game loop must catch and call makeMove again.
+        rethrow;
       } catch (e) {
         print('Invalid numbers.');
+        throw FormatException('Invalid numbers');
       }
     }
   }
@@ -104,19 +113,23 @@ class BotPlayer extends Player {
   BotPlayer(super.name, super.boardSize);
 
   @override
-  Point<int> makeMove(Board opponentBoard) {
-    // Simple random move
-    // Improvement: Hunt mode
-    // For now, random valid move
-    while (true) {
-      int x = _rng.nextInt(opponentBoard.width);
-      int y = _rng.nextInt(opponentBoard.height);
-      var p = Point(x, y);
-      if (!opponentBoard.shots.contains(p)) {
-        print('$name attacks $x $y');
-        return p;
+  Future<Point<int>> makeMove(Board opponentBoard) async {
+    // Use Isolate to calculate move
+    final shots = opponentBoard.shots.toList();
+    final width = opponentBoard.width;
+    final height = opponentBoard.height;
+
+    return await Isolate.run(() {
+      final rng = Random();
+      while (true) {
+        int x = rng.nextInt(width);
+        int y = rng.nextInt(height);
+        var p = Point(x, y);
+        if (!shots.contains(p)) {
+          return p;
+        }
       }
-    }
+    });
   }
 
   @override
